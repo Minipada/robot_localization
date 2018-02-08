@@ -35,7 +35,6 @@
 
 namespace RobotLocalization
 {
-
 //! @brief Enumeration that defines the state vector
 //!
 enum StateMembers

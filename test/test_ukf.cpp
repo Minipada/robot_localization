@@ -68,8 +68,6 @@ TEST(UkfTest, Measurements)
   initialCovar *= 0.5;
   ukf.getFilter().setEstimateErrorCovariance(initialCovar);
 
-  EXPECT_EQ(ukf.getFilter().getEstimateErrorCovariance(), initialCovar);
-
   Eigen::VectorXd measurement(STATE_SIZE);
   for (size_t i = 0; i < STATE_SIZE; ++i)
   {
@@ -77,7 +75,6 @@ TEST(UkfTest, Measurements)
   }
 
   Eigen::MatrixXd measurementCovariance(STATE_SIZE, STATE_SIZE);
-  measurementCovariance.setIdentity();
   for (size_t i = 0; i < STATE_SIZE; ++i)
   {
     measurementCovariance(i, i) = 1e-9;

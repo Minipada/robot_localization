@@ -41,14 +41,12 @@
 
 #include <ros/ros.h>
 #include <std_msgs/String.h>
-#include <std_srvs/Empty.h>
 #include <nav_msgs/Odometry.h>
 #include <sensor_msgs/Imu.h>
 #include <geometry_msgs/Twist.h>
 #include <geometry_msgs/TwistStamped.h>
 #include <geometry_msgs/TwistWithCovarianceStamped.h>
 #include <geometry_msgs/PoseWithCovarianceStamped.h>
-#include <geometry_msgs/AccelWithCovarianceStamped.h>
 #include <tf2_ros/transform_listener.h>
 #include <tf2_ros/transform_broadcaster.h>
 #include <tf2_ros/message_filter.h>
@@ -57,6 +55,8 @@
 #include <diagnostic_updater/diagnostic_updater.h>
 #include <diagnostic_updater/publisher.h>
 #include <diagnostic_msgs/DiagnosticStatus.h>
+
+#include <std_srvs/SetBool.h>
 
 #include <XmlRpcException.h>
 
@@ -118,10 +118,6 @@ template<class T> class RosFilter
     //!
     ~RosFilter();
 
-    //! @brief Resets the filter to its initial state
-    //!
-    void reset();
-
     //! @brief Callback method for receiving all acceleration (IMU) messages
     //! @param[in] msg - The ROS IMU message to take in.
     //! @param[in] callbackData - Relevant static callback data
@@ -175,12 +171,6 @@ template<class T> class RosFilter
     //! @return true if the filter is initialized, false otherwise
     //!
     bool getFilteredOdometryMessage(nav_msgs::Odometry &message);
-
-    //! @brief Retrieves the EKF's acceleration output for broadcasting
-    //! @param[out] message - The standard ROS acceleration message to be filled
-    //! @return true if the filter is initialized, false otherwise
-    //!
-    bool getFilteredAccelMessage(geometry_msgs::AccelWithCovarianceStamped &message);
 
     //! @brief Callback method for receiving all IMU messages
     //! @param[in] msg - The ROS IMU message to take in.
@@ -239,18 +229,16 @@ template<class T> class RosFilter
     void setPoseCallback(const geometry_msgs::PoseWithCovarianceStamped::ConstPtr &msg);
 
     //! @brief Service callback for manually setting/resetting the internal pose estimate
-    //!
     //! @param[in] request - Custom service request with pose information
-    //! @return true if successful, false if not
+    //! @param[out] response - N/A
+    //! @return boolean true if successful, false if not
     bool setPoseSrvCallback(robot_localization::SetPose::Request& request,
                             robot_localization::SetPose::Response&);
 
-    //! @brief Service callback for manually enable the filter
-    //! @param[in] request - N/A
-    //! @param[out] response - N/A
-    //! @return boolean true if successful, false if not
-    bool enableFilterSrvCallback(std_srvs::Empty::Request&,
-                                 std_srvs::Empty::Response&);
+    //! @brief Converts tf message filter failures to strings
+    //! @param[in] reason - The failure reason object
+    //! @return a string explanation of the failure
+    std::string tfFailureReasonString(const tf2_ros::FilterFailureReason reason);
 
     //! @brief Callback method for receiving all twist messages
     //! @param[in] msg - The ROS stamped twist with covariance message to take in.
@@ -266,8 +254,6 @@ template<class T> class RosFilter
     //!
     //! This method also inserts all measurements between the older filter timestamp and now into the measurements
     //! queue.
-    //!
-    //! @param[in] time - The time to which the filter state should revert
     //! @return True if restoring the filter succeeded. False if not.
     //!
     bool revertTo(const double time);
@@ -275,7 +261,7 @@ template<class T> class RosFilter
     //! @brief Saves the current filter state in the queue of previous filter states
     //!
     //! These measurements will be used in backwards smoothing in the event that older measurements come in.
-    //! @param[in] filter - The filter base object whose state we want to save
+    //! @param[in] The filter base object whose state we want to save
     //!
     void saveFilterState(FilterBase &filter);
 
@@ -288,7 +274,6 @@ template<class T> class RosFilter
     //! @param[in] errLevel - The error level of the diagnostic
     //! @param[in] topicAndClass - The sensor topic (if relevant) and class of diagnostic
     //! @param[in] message - Details of the diagnostic
-    //! @param[in] staticDiag - Whether or not this diagnostic information is static
     //!
     void addDiagnostic(const int errLevel,
                        const std::string &topicAndClass,
@@ -437,13 +422,6 @@ template<class T> class RosFilter
     //!
     double historyLength_;
 
-    //! @brief Whether to reset the filters when backwards jump in time is detected
-    //!
-    //! This is usually the case when logs are being used and a jump in the logi
-    //! is done or if a log files restarts from the beginning.
-    //!
-    bool resetOnTimeJump_;
-
     //! @brief The most recent control input
     //!
     Eigen::VectorXd latestControl_;
@@ -451,10 +429,6 @@ template<class T> class RosFilter
     //! @brief The time of the most recent control input
     //!
     ros::Time latestControlTime_;
-
-    //! @brief Parameter that specifies the how long we wait for a transform to become available.
-    //!
-    ros::Duration tfTimeout_;
 
     //! @brief Vector to hold our subscribers until they go out of scope
     //!
@@ -527,11 +501,6 @@ template<class T> class RosFilter
     //!
     std::map<std::string, Eigen::MatrixXd> previousMeasurementCovariances_;
 
-    //! @brief By default, the filter predicts and corrects up to the time of the latest measurement. If this is set
-    //! to true, the filter does the same, but then also predicts up to the current time step.
-    //!
-    bool predictToCurrentTime_;
-
     //! @brief Whether or not we print diagnostic messages to the /diagnostics topic
     //!
     bool printDiagnostics_;
@@ -539,10 +508,6 @@ template<class T> class RosFilter
     //! @brief If including acceleration for each IMU input, whether or not we remove acceleration due to gravity
     //!
     std::map<std::string, bool> removeGravitationalAcc_;
-
-    //! @brief What is the acceleration in Z due to gravity (m/s^2)? Default is +9.80665.
-    //!
-    double gravitationalAcc_;
 
     //! @brief Subscribes to the set_pose topic (usually published from rviz). Message
     //! type is geometry_msgs/PoseWithCovarianceStamped.
@@ -557,10 +522,6 @@ template<class T> class RosFilter
     //! @brief Whether or not we use smoothing
     //!
     bool smoothLaggedData_;
-
-    //! @brief Service that allows another node to enable the filter. Uses a standard Empty service.
-    //!
-    ros::ServiceServer enableFilterSrv_;
 
     //! @brief Contains the state vector variable names in string format
     //!
@@ -594,16 +555,6 @@ template<class T> class RosFilter
     //!
     bool useControl_;
 
-    //! @brief Start the Filter disabled at startup
-    //!
-    //! If this is true, the filter reads parameters and prepares publishers and subscribes
-    //! but does not integrate new messages into the state vector.
-    //! The filter can be enabled later using a service.
-    bool disabledAtStartup_;
-
-    //! @brief Whether the filter is enabled or not. See disabledAtStartup_.
-    bool enabled_;
-
     //! @brief Message that contains our latest transform (i.e., state)
     //!
     //! We use the vehicle's latest state in a number of places, and often
@@ -620,10 +571,6 @@ template<class T> class RosFilter
     //!
     bool publishTransform_;
 
-    //! @brief Whether we publish the acceleration
-    //!
-    bool publishAcceleration_;
-
     //! @brief An implicitly time ordered queue of past filter states used for smoothing.
     //
     // front() refers to the filter state with the earliest timestamp.
@@ -635,6 +582,15 @@ template<class T> class RosFilter
     // front() refers to the measurement with the earliest timestamp.
     // back() refers to the measurement with the latest timestamp.
     MeasurementHistoryDeque measurementHistory_;
+
+
+    // stuff for the disable-service
+    bool is_active_;
+    ros::ServiceServer disable_srv_;
+
+    bool setActiveSrvCb(std_srvs::SetBool::Request &req,
+                      std_srvs::SetBool::Response &res);
+
 };
 
 }  // namespace RobotLocalization

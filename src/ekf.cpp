@@ -51,14 +51,30 @@ namespace RobotLocalization
   {
   }
 
-  void Ekf::correct(const Measurement &measurement)
-  {
-    FB_DEBUG("---------------------- Ekf::correct ----------------------\n" <<
-             "State is:\n" << state_ << "\n"
-             "Topic is:\n" << measurement.topicName_ << "\n"
-             "Measurement is:\n" << measurement.measurement_ << "\n"
-             "Measurement topic name is:\n" << measurement.topicName_ << "\n\n"
-             "Measurement covariance is:\n" << measurement.covariance_ << "\n");
+void __attribute__((optimize("O3")))Ekf::multiplyMatrix(Eigen::MatrixXd &mat_mult, Eigen::MatrixXd &mat_mult2, Eigen::MatrixXd &mat_to_store, bool alias)
+{
+    if(alias)
+        mat_to_store = mat_mult * mat_mult2;
+    else
+        mat_to_store.noalias() = mat_mult * mat_mult2;
+}
+
+void __attribute__((optimize("O3")))Ekf::multiplyMatrixandVector(Eigen::MatrixXd &mat_mult, Eigen::VectorXd &vector_mult, Eigen::MatrixXd &mat_to_store, bool alias)
+{
+    if(alias)
+        mat_to_store = mat_mult * vector_mult;
+    else
+        mat_to_store.noalias() = mat_mult*vector_mult;
+}
+
+void /*__attribute__((optimize("O0")))*/Ekf::correct(const Measurement &measurement)
+{
+    //std::cout << "---------------------- Ekf::correct ----------------------\n" <<
+    // "State is:\n" << state_ << "\n"
+    //"Topic is:\n" << measurement.topicName_ << "\n"
+    //"Measurement is:\n" << measurement.measurement_ << "\n"
+    //"Measurement topic name is:\n" << measurement.topicName_ << "\n\n"
+    //"Measurement covariance is:\n" << measurement.covariance_ << "\n";
 
     // We don't want to update everything, so we need to build matrices that only update
     // the measured parts of our state vector. Throughout prediction and correction, we
@@ -73,11 +89,11 @@ namespace RobotLocalization
         // Handle nan and inf values in measurements
         if (std::isnan(measurement.measurement_(i)))
         {
-          FB_DEBUG("Value at index " << i << " was nan. Excluding from update.\n");
+          //FB_DEBUG("Value at index " << i << " was nan. Excluding from update.\n");
         }
         else if (std::isinf(measurement.measurement_(i)))
         {
-          FB_DEBUG("Value at index " << i << " was inf. Excluding from update.\n");
+          //FB_DEBUG("Value at index " << i << " was inf. Excluding from update.\n");
         }
         else
         {
@@ -86,7 +102,8 @@ namespace RobotLocalization
       }
     }
 
-    FB_DEBUG("Update indices are:\n" << updateIndices << "\n");
+
+    //   FB_DEBUG("Update indices are:\n" << updateIndices << "\n");
 
     size_t updateSize = updateIndices.size();
 
@@ -121,9 +138,9 @@ namespace RobotLocalization
       // the absolute value.
       if (measurementCovarianceSubset(i, i) < 0)
       {
-        FB_DEBUG("WARNING: Negative covariance for index " << i <<
+        /*FB_DEBUG("WARNING: Negative covariance for index " << i <<
                  " of measurement (value is" << measurementCovarianceSubset(i, i) <<
-                 "). Using absolute value...\n");
+                 "). Using absolute value...\n");*/
 
         measurementCovarianceSubset(i, i) = ::fabs(measurementCovarianceSubset(i, i));
       }
@@ -136,8 +153,8 @@ namespace RobotLocalization
       // amount in that case.
       if (measurementCovarianceSubset(i, i) < 1e-9)
       {
-        FB_DEBUG("WARNING: measurement had very small error covariance for index " << updateIndices[i] <<
-                 ". Adding some noise to maintain filter stability.\n");
+        /*FB_DEBUG("WARNING: measurement had very small error covariance for index " << updateIndices[i] <<
+                 ". Adding some noise to maintain filter stability.\n");*/
 
         measurementCovarianceSubset(i, i) = 1e-9;
       }
@@ -150,17 +167,26 @@ namespace RobotLocalization
       stateToMeasurementSubset(i, updateIndices[i]) = 1;
     }
 
-    FB_DEBUG("Current state subset is:\n" << stateSubset <<
+    /* FB_DEBUG("Current state subset is:\n" << stateSubset <<
              "\nMeasurement subset is:\n" << measurementSubset <<
              "\nMeasurement covariance subset is:\n" << measurementCovarianceSubset <<
-             "\nState-to-measurement subset is:\n" << stateToMeasurementSubset << "\n");
+             "\nState-to-measurement subset is:\n" << stateToMeasurementSubset << "\n"); */
 
     // (1) Compute the Kalman gain: K = (PH') / (HPH' + R)
-    Eigen::MatrixXd pht = estimateErrorCovariance_ * stateToMeasurementSubset.transpose();
-    Eigen::MatrixXd hphrInv  = (stateToMeasurementSubset * pht + measurementCovarianceSubset).inverse();
+    Eigen::MatrixXd transp(state_.rows(),updateSize);
+    transp.setZero();
+
+    transp = stateToMeasurementSubset.transpose();
+    Eigen::MatrixXd pht(estimateErrorCovariance_.rows(), transp.cols());
+    pht.setZero();
+
+    multiplyMatrix(estimateErrorCovariance_,transp,pht);
+    Eigen::MatrixXd hphrInv(updateSize, updateSize);
+    hphrInv.setZero();
+    hphrInv = (stateToMeasurementSubset * pht + measurementCovarianceSubset).inverse();
     kalmanGainSubset.noalias() = pht * hphrInv;
 
-    innovationSubset = (measurementSubset - stateSubset);
+    innovationSubset.noalias() = (measurementSubset - stateSubset);
 
     // Wrap angles in the innovation
     for (size_t i = 0; i < updateSize; ++i)
@@ -185,32 +211,48 @@ namespace RobotLocalization
     if (checkMahalanobisThreshold(innovationSubset, hphrInv, measurement.mahalanobisThresh_))
     {
       // (3) Apply the gain to the difference between the state and measurement: x = x + K(z - Hx)
-      state_.noalias() += kalmanGainSubset * innovationSubset;
+        Eigen::MatrixXd tempInnovation(kalmanGainSubset.rows(),innovationSubset.cols() );
+        tempInnovation.setZero();
+        multiplyMatrixandVector(kalmanGainSubset, innovationSubset, tempInnovation, false);
+        state_.noalias() += tempInnovation;
 
-      // (4) Update the estimate error covariance using the Joseph form: (I - KH)P(I - KH)' + KRK'
-      Eigen::MatrixXd gainResidual = identity_;
-      gainResidual.noalias() -= kalmanGainSubset * stateToMeasurementSubset;
-      estimateErrorCovariance_ = gainResidual * estimateErrorCovariance_ * gainResidual.transpose();
-      estimateErrorCovariance_.noalias() += kalmanGainSubset *
-                                            measurementCovarianceSubset *
-                                            kalmanGainSubset.transpose();
+        // (4) Update the estimate error covariance using the Joseph form: (I - KH)P(I - KH)' + KRK'
+        Eigen::MatrixXd tempResidual(kalmanGainSubset.rows(), stateToMeasurementSubset.cols());
+        tempResidual.setZero();
+        Eigen::MatrixXd gainResidual(identity_.rows(), identity_.cols());
+        gainResidual.setZero();
+        gainResidual = identity_;
+        multiplyMatrix(kalmanGainSubset, stateToMeasurementSubset, tempResidual, false);
+        gainResidual.noalias() -= tempResidual;
 
-      // Handle wrapping of angles
-      wrapStateAngles();
+        multiplyMatrix(gainResidual, estimateErrorCovariance_, estimateErrorCovariance_);
+        gainResidual.transposeInPlace();
+        multiplyMatrix(estimateErrorCovariance_,gainResidual, estimateErrorCovariance_);
 
-      FB_DEBUG("Kalman gain subset is:\n" << kalmanGainSubset <<
+        Eigen::MatrixXd tempGainSubset(kalmanGainSubset.rows(), measurementCovarianceSubset.cols());
+        tempGainSubset.setZero();
+
+        multiplyMatrix(kalmanGainSubset, measurementCovarianceSubset, tempGainSubset, false);
+        kalmanGainSubset.transposeInPlace();
+        multiplyMatrix(tempGainSubset, kalmanGainSubset, tempGainSubset);
+        estimateErrorCovariance_.noalias() += tempGainSubset;
+
+        // Handle wrapping of angles
+        wrapStateAngles();
+
+        /*FB_DEBUG("Kalman gain subset is:\n" << kalmanGainSubset <<
                "\nInnovation is:\n" << innovationSubset <<
                "\nCorrected full state is:\n" << state_ <<
                "\nCorrected full estimate error covariance is:\n" << estimateErrorCovariance_ <<
-               "\n\n---------------------- /Ekf::correct ----------------------\n");
+               "\n\n---------------------- /Ekf::correct ----------------------\n");*/
     }
   }
 
   void Ekf::predict(const double referenceTime, const double delta)
   {
-    FB_DEBUG("---------------------- Ekf::predict ----------------------\n" <<
+    /*FB_DEBUG("---------------------- Ekf::predict ----------------------\n" <<
              "delta is " << delta << "\n" <<
-             "state is " << state_ << "\n");
+             "state is " << state_ << "\n"); */
 
     double roll = state_(StateMemberRoll);
     double pitch = state_(StateMemberPitch);
@@ -226,14 +268,17 @@ namespace RobotLocalization
     double zAcc = state_(StateMemberAz);
 
     // We'll need these trig calculations a lot.
-    double sp = ::sin(pitch);
-    double cp = ::cos(pitch);
+    double sp = 0.0;
+    double cp = 0.0;
+    ::sincos(pitch, &sp, &cp);
 
-    double sr = ::sin(roll);
-    double cr = ::cos(roll);
+    double sr = 0.0;
+    double cr = 0.0;
+    ::sincos(roll, &sr, &cr);
 
-    double sy = ::sin(yaw);
-    double cy = ::cos(yaw);
+    double sy = 0.0;
+    double cy = 0.0;
+    ::sincos(yaw, &sy, &cy);
 
     prepareControl(referenceTime, delta);
 
@@ -348,18 +393,10 @@ namespace RobotLocalization
     transferFunctionJacobian_(StateMemberYaw, StateMemberRoll) = dFY_dR;
     transferFunctionJacobian_(StateMemberYaw, StateMemberPitch) = dFY_dP;
 
-    FB_DEBUG("Transfer function is:\n" << transferFunction_ <<
+    /*FB_DEBUG("Transfer function is:\n" << transferFunction_ <<
              "\nTransfer function Jacobian is:\n" << transferFunctionJacobian_ <<
              "\nProcess noise covariance is:\n" << processNoiseCovariance_ <<
-             "\nCurrent state is:\n" << state_ << "\n");
-
-    Eigen::MatrixXd *processNoiseCovariance = &processNoiseCovariance_;
-
-    if (useDynamicProcessNoiseCovariance_)
-    {
-      computeDynamicProcessNoiseCovariance(state_, delta);
-      processNoiseCovariance = &dynamicProcessNoiseCovariance_;
-    }
+             "\nCurrent state is:\n" << state_ << "\n");*/
 
     // (1) Apply control terms, which are actually accelerations
     state_(StateMemberVroll) += controlAcceleration_(ControlMemberVroll) * delta;
@@ -379,17 +416,17 @@ namespace RobotLocalization
     // Handle wrapping
     wrapStateAngles();
 
-    FB_DEBUG("Predicted state is:\n" << state_ <<
-             "\nCurrent estimate error covariance is:\n" <<  estimateErrorCovariance_ << "\n");
+    /*FB_DEBUG("Predicted state is:\n" << state_ <<
+             "\nCurrent estimate error covariance is:\n" <<  estimateErrorCovariance_ << "\n");*/
 
     // (3) Project the error forward: P = J * P * J' + Q
-    estimateErrorCovariance_ = (transferFunctionJacobian_ *
-                                estimateErrorCovariance_ *
-                                transferFunctionJacobian_.transpose());
-    estimateErrorCovariance_.noalias() += delta * (*processNoiseCovariance);
+    multiplyMatrix(transferFunctionJacobian_, estimateErrorCovariance_,estimateErrorCovariance_);
+    transferFunctionJacobian_.transposeInPlace();
+    multiplyMatrix(estimateErrorCovariance_, transferFunctionJacobian_, estimateErrorCovariance_);
+    estimateErrorCovariance_.noalias() += (processNoiseCovariance_ * delta);
 
-    FB_DEBUG("Predicted estimate error covariance is:\n" << estimateErrorCovariance_ <<
-             "\n\n--------------------- /Ekf::predict ----------------------\n");
-  }
+    /*FB_DEBUG("Predicted estimate error covariance is:\n" << estimateErrorCovariance_ <<
+             "\n\n--------------------- /Ekf::predict ----------------------\n"); */
+}
 
-}  // namespace RobotLocalization
+};  // namespace RobotLocalization

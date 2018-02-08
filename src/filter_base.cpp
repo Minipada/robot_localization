@@ -33,11 +33,10 @@
 #include "robot_localization/filter_base.h"
 #include "robot_localization/filter_common.h"
 
-#include <iomanip>
-#include <iostream>
-#include <limits>
 #include <sstream>
-#include <vector>
+#include <iomanip>
+#include <limits>
+#include <iostream>
 
 namespace RobotLocalization
 {
@@ -49,7 +48,6 @@ namespace RobotLocalization
     controlAcceleration_(TWIST_SIZE),
     controlTimeout_(0.0),
     controlUpdateVector_(TWIST_SIZE, 0),
-    dynamicProcessNoiseCovariance_(STATE_SIZE, STATE_SIZE),
     latestControlTime_(0.0),
     state_(STATE_SIZE),
     predictedState_(STATE_SIZE),
@@ -61,17 +59,7 @@ namespace RobotLocalization
     identity_(STATE_SIZE, STATE_SIZE),
     debug_(false),
     debugStream_(NULL),
-    useControl_(false),
-    useDynamicProcessNoiseCovariance_(false)
-  {
-    reset();
-  }
-
-  FilterBase::~FilterBase()
-  {
-  }
-
-  void FilterBase::reset()
+    useControl_(false)
   {
     initialized_ = false;
 
@@ -104,7 +92,8 @@ namespace RobotLocalization
     // Assume 30Hz from sensor data (configurable)
     sensorTimeout_ = 0.033333333;
 
-    // Initialize our measurement time
+    // Initialize our last update and measurement times
+    lastUpdateTime_ = 0;
     lastMeasurementTime_ = 0;
 
     // These can be overridden via the launch parameters,
@@ -125,27 +114,10 @@ namespace RobotLocalization
     processNoiseCovariance_(StateMemberAx, StateMemberAx) = 0.01;
     processNoiseCovariance_(StateMemberAy, StateMemberAy) = 0.01;
     processNoiseCovariance_(StateMemberAz, StateMemberAz) = 0.015;
-
-    dynamicProcessNoiseCovariance_ = processNoiseCovariance_;
   }
 
-  void FilterBase::computeDynamicProcessNoiseCovariance(const Eigen::VectorXd &state, const double delta)
+  FilterBase::~FilterBase()
   {
-    // A more principled approach would be to get the current velocity from the state, make a diagonal matrix from it,
-    // and then rotate it to be in the world frame (i.e., the same frame as the pose data). We could then use this
-    // rotated velocity matrix to scale the process noise covariance for the pose variables as
-    // rotatedVelocityMatrix * poseCovariance * rotatedVelocityMatrix'
-    // However, this presents trouble for robots that may incur rotational error as a result of linear motion (and
-    // vice-versa). Instead, we create a diagonal matrix whose diagonal values are the vector norm of the state's
-    // velocity. We use that to scale the process noise covariance.
-    Eigen::MatrixXd velocityMatrix(TWIST_SIZE, TWIST_SIZE);
-    velocityMatrix.setIdentity();
-    velocityMatrix.diagonal() *= state.segment(POSITION_V_OFFSET, TWIST_SIZE).norm();
-
-    dynamicProcessNoiseCovariance_.block<TWIST_SIZE, TWIST_SIZE>(POSITION_OFFSET, POSITION_OFFSET) =
-      velocityMatrix *
-      processNoiseCovariance_.block<TWIST_SIZE, TWIST_SIZE>(POSITION_OFFSET, POSITION_OFFSET) *
-      velocityMatrix.transpose();
   }
 
   const Eigen::VectorXd& FilterBase::getControl()
@@ -176,6 +148,11 @@ namespace RobotLocalization
   double FilterBase::getLastMeasurementTime()
   {
     return lastMeasurementTime_;
+  }
+
+  double FilterBase::getLastUpdateTime()
+  {
+    return lastUpdateTime_;
   }
 
   const Eigen::VectorXd& FilterBase::getPredictedState()
@@ -256,6 +233,13 @@ namespace RobotLocalization
 
     if (delta >= 0.0)
     {
+      // Update the last measurement and update time.
+      // The measurement time is based on the time stamp of the
+      // measurement, whereas the update time is based on this
+      // node's current ROS time. The update time is used to
+      // determine if we have a sensor timeout, whereas the
+      // measurement time is used to calculate time deltas for
+      // prediction and correction.
       lastMeasurementTime_ = measurement.time_;
     }
 
@@ -301,11 +285,6 @@ namespace RobotLocalization
     }
   }
 
-  void FilterBase::setUseDynamicProcessNoiseCovariance(const bool useDynamicProcessNoiseCovariance)
-  {
-    useDynamicProcessNoiseCovariance_ = useDynamicProcessNoiseCovariance;
-  }
-
   void FilterBase::setEstimateErrorCovariance(const Eigen::MatrixXd &estimateErrorCovariance)
   {
     estimateErrorCovariance_ = estimateErrorCovariance;
@@ -316,10 +295,14 @@ namespace RobotLocalization
     lastMeasurementTime_ = lastMeasurementTime;
   }
 
+  void FilterBase::setLastUpdateTime(const double lastUpdateTime)
+  {
+    lastUpdateTime_ = lastUpdateTime;
+  }
+
   void FilterBase::setProcessNoiseCovariance(const Eigen::MatrixXd &processNoiseCovariance)
   {
     processNoiseCovariance_ = processNoiseCovariance;
-    dynamicProcessNoiseCovariance_ = processNoiseCovariance_;
   }
 
   void FilterBase::setSensorTimeout(const double sensorTimeout)
@@ -352,15 +335,15 @@ namespace RobotLocalization
     {
       bool timedOut = ::fabs(referenceTime - latestControlTime_) >= controlTimeout_;
 
-      if (timedOut)
+      if(timedOut)
       {
         FB_DEBUG("Control timed out. Reference time was " << referenceTime << ", latest control time was " <<
           latestControlTime_ << ", control timeout was " << controlTimeout_ << "\n");
       }
 
-      for (size_t controlInd = 0; controlInd < TWIST_SIZE; ++controlInd)
+      for(size_t controlInd = 0; controlInd < TWIST_SIZE; ++controlInd)
       {
-        if (controlUpdateVector_[controlInd])
+        if(controlUpdateVector_[controlInd])
         {
           controlAcceleration_(controlInd) = computeControlAcceleration(state_(controlInd + POSITION_V_OFFSET),
             (timedOut ? 0.0 : latestControl_(controlInd)), accelerationLimits_[controlInd],

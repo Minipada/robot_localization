@@ -42,7 +42,6 @@
 
 namespace RobotLocalization
 {
-
 //! @brief Extended Kalman filter class
 //!
 //! Implementation of an extended Kalman filter (EKF). This
@@ -79,7 +78,9 @@ class Ekf: public FilterBase
     //! @param[in] referenceTime - The time at which the prediction is being made
     //! @param[in] delta - The time step over which to predict.
     //!
-    void predict(const double referenceTime, const double delta);
+      void predict(const double referenceTime, const double delta);
+      void multiplyMatrix(Eigen::MatrixXd &mat_mult, Eigen::MatrixXd &mat_mult2, Eigen::MatrixXd &mat_to_store, bool alias=true);
+      void multiplyMatrixandVector(Eigen::MatrixXd &mat_mult, Eigen::VectorXd &vector_mult, Eigen::MatrixXd &mat_to_store, bool alias=true);
 };
 
 }  // namespace RobotLocalization

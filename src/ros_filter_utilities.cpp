@@ -37,7 +37,6 @@
 #include <ros/console.h>
 
 #include <string>
-#include <vector>
 
 std::ostream& operator<<(std::ostream& os, const tf2::Vector3 &vec)
 {
@@ -69,7 +68,7 @@ std::ostream& operator<<(std::ostream& os, const std::vector<double> &vec)
 {
   os << "(" << std::setprecision(20);
 
-  for (size_t i = 0; i < vec.size(); ++i)
+  for(size_t i = 0; i < vec.size(); ++i)
   {
     os << vec[i] << " ";
   }
@@ -99,16 +98,14 @@ namespace RosFilterUtilities
                            const std::string &targetFrame,
                            const std::string &sourceFrame,
                            const ros::Time &time,
-                           const ros::Duration &timeout,
-                           tf2::Transform &targetFrameTrans,
-                           const bool silent)
+                           tf2::Transform &targetFrameTrans)
   {
     bool retVal = true;
 
     // First try to transform the data at the requested time
     try
     {
-      tf2::fromMsg(buffer.lookupTransform(targetFrame, sourceFrame, time, timeout).transform,
+      tf2::fromMsg(buffer.lookupTransform(targetFrame, sourceFrame, time).transform,
                    targetFrameTrans);
     }
     catch (tf2::TransformException &ex)
@@ -121,19 +118,13 @@ namespace RosFilterUtilities
         tf2::fromMsg(buffer.lookupTransform(targetFrame, sourceFrame, ros::Time(0)).transform,
                      targetFrameTrans);
 
-        if (!silent)
-        {
-          ROS_WARN_STREAM_THROTTLE(2.0, "Transform from " << sourceFrame << " to " << targetFrame <<
-                                        " was unavailable for the time requested. Using latest instead.\n");
-        }
+        ROS_WARN_STREAM_THROTTLE(2.0, "Transform from " << sourceFrame << " to " << targetFrame <<
+                                      " was unavailable for the time requested. Using latest instead.\n");
       }
       catch(tf2::TransformException &ex)
       {
-        if (!silent)
-        {
-          ROS_WARN_STREAM_THROTTLE(2.0, "Could not obtain transform from " << sourceFrame <<
-                                        " to " << targetFrame << ". Error was " << ex.what() << "\n");
-        }
+        ROS_WARN_STREAM_THROTTLE(2.0, "Could not obtain transform from " << sourceFrame <<
+                                      " to " << targetFrame << ". Error was " << ex.what() << "\n");
 
         retVal = false;
       }
@@ -152,16 +143,6 @@ namespace RosFilterUtilities
     }
 
     return retVal;
-  }
-
-  bool lookupTransformSafe(const tf2_ros::Buffer &buffer,
-                           const std::string &targetFrame,
-                           const std::string &sourceFrame,
-                           const ros::Time &time,
-                           tf2::Transform &targetFrameTrans,
-                           const bool silent)
-  {
-    return lookupTransformSafe(buffer, targetFrame, sourceFrame, time, ros::Duration(0), targetFrameTrans, silent);
   }
 
   void quatToRPY(const tf2::Quaternion &quat, double &roll, double &pitch, double &yaw)

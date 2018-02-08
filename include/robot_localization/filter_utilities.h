@@ -61,7 +61,7 @@ namespace FilterUtilities
 
   //! @brief Utility method for appending tf2 prefixes cleanly
   //! @param[in] tfPrefix - the tf2 prefix to append
-  //! @param[in, out] frameId - the resulting frame_id value
+  //! @paramp[in, out] frameId - the resulting frame_id value
   //!
   void appendPrefix(std::string tfPrefix, std::string &frameId);
 
